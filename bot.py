@@ -6,18 +6,18 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 logging.basicConfig(level=logging.INFO)
 
 # =========================
-# НАСТРОЙКИ
+# НАСТРОЙКИ (как ты просил)
 # =========================
 TOKEN = "8367905898:AAEimA-3iLi-JqP9r4cJPnOzYE-L4eYsk-U"
 
-INVITE_LINK = "https://t.me/NaturalSense"
+INVITE_LINK = "https://t.me/NaturalSense"   # ✅ как ты сказал
 CONTACT_EMAIL = "naturalsense.pr@gmail.com"
 CONTACT_TG = "@NScollab"
 
 COVER_PATH = "cover.jpg"  # файл рядом с bot.py
 
 # =========================
-# ТЕКСТЫ
+# ТЕКСТЫ (как на фото)
 # =========================
 TITLE = "✨ NS · Natural Sense"
 SUBTITLE = "Распаковки · Бренды · Обзоры\nСравнения · Новости"
@@ -30,9 +30,10 @@ ABOUT_TEXT = (
     "Natural Sense — обзоры косметики, брендов и новинок."
 )
 
+# ВАЖНО: контакты убраны из текста — они будут кнопками
 COLLAB_TEXT = (
     "🤝 *Сотрудничество*\n\n"
-    "Выберите способ связи:"
+    "Выберите удобный способ связи:"
 )
 
 # =========================
@@ -46,9 +47,9 @@ def main_keyboard():
         [InlineKeyboardButton("❌ Выйти", callback_data="exit")],
     ])
 
-def back_to_menu_keyboard():
+def back_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅ Назад", callback_data="back_to_menu")]
+        [InlineKeyboardButton("⬅ Назад", callback_data="back")]
     ])
 
 def collab_keyboard():
@@ -56,76 +57,89 @@ def collab_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📧 Написать на Email", url=f"mailto:{CONTACT_EMAIL}")],
         [InlineKeyboardButton("💬 Написать в Telegram", url=f"https://t.me/{tg_username}")],
-        [InlineKeyboardButton("⬅ Назад", callback_data="back_to_menu")],
+        [InlineKeyboardButton("⬅ Назад", callback_data="back")]
     ])
 
 # =========================
-# ОТПРАВКА ГЛАВНОГО МЕНЮ (фото + кнопки)
+# УТИЛИТА: отправить / обновить "главное меню" С КАРТИНКОЙ
 # =========================
-async def send_main_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Отправляем одно красивое сообщение с фото + caption + кнопки
     if not os.path.exists(COVER_PATH):
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="❗ Не найден файл cover.jpg рядом с bot.py. Положи cover.jpg в папку с bot.py и перезапусти."
+        await update.message.reply_text(
+            "❗ Не найден файл cover.jpg рядом с bot.py. Положи cover.jpg в папку с bot.py и перезапусти."
         )
         return
 
     with open(COVER_PATH, "rb") as f:
-        await context.bot.send_photo(
-            chat_id=chat_id,
+        msg = await update.message.reply_photo(
             photo=InputFile(f),
             caption=MAIN_CAPTION,
             reply_markup=main_keyboard(),
         )
 
+    # Запоминаем ID этого сообщения, чтобы потом его редактировать
+    context.user_data["menu_chat_id"] = msg.chat_id
+    context.user_data["menu_message_id"] = msg.message_id
+
+async def edit_to_main_menu(query, context: ContextTypes.DEFAULT_TYPE):
+    # Возвращаемся к главному экрану (фото+caption+кнопки)
+    chat_id = context.user_data.get("menu_chat_id")
+    message_id = context.user_data.get("menu_message_id")
+
+    if not chat_id or not message_id:
+        # ВАЖНО: не делаем edit_message_text (чтобы не сломать фото-сообщение)
+        await query.message.reply_text("Нажми /start чтобы открыть меню заново.")
+        return
+
+    # Редактируем caption у фото
+    await context.bot.edit_message_caption(
+        chat_id=chat_id,
+        message_id=message_id,
+        caption=MAIN_CAPTION,
+        reply_markup=main_keyboard(),
+    )
+
 # =========================
 # /start
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_main_menu(update.effective_chat.id, context)
+    await send_main_menu(update, context)
 
 # =========================
-# CALLBACK BUTTONS
+# КНОПКИ
 # =========================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    chat_id = query.message.chat_id
-
-    # Выйти
+    # Выйти (ВАЖНО: НЕ edit_message_text, иначе "убьёт" фото и дальше не будет работать edit_caption)
     if query.data == "exit":
-        await query.message.reply_text("❌ Вы вышли из меню.")
+        await query.answer("❌ Вы вышли из меню.", show_alert=True)
         return
 
-    # Назад в главное меню (просто снова показываем фото-меню)
-    if query.data == "back_to_menu":
-        await send_main_menu(chat_id, context)
+    # Назад
+    if query.data == "back":
+        await edit_to_main_menu(query, context)
         return
 
-    # О канале — отправляем отдельным сообщением + кнопка назад
+    # О канале — меняем caption у фото
     if query.data == "about":
-        await query.message.reply_text(
-            text=ABOUT_TEXT,
+        await query.message.edit_caption(
+            caption=ABOUT_TEXT,
             parse_mode="Markdown",
-            reply_markup=back_to_menu_keyboard(),
+            reply_markup=back_keyboard(),
         )
         return
 
-    # Сотрудничество — ВОТ ТУТ 100% будут 2 кнопки (email + telegram)
+    # Сотрудничество — меняем caption у фото + показываем 2 кнопки (email + telegram)
     if query.data == "collab":
-        await query.message.reply_text(
-            text=COLLAB_TEXT,
+        await query.message.edit_caption(
+            caption=COLLAB_TEXT,
             parse_mode="Markdown",
             reply_markup=collab_keyboard(),
         )
         return
-
-# =========================
-# ERROR HANDLER
-# =========================
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logging.exception("Exception while handling an update:", exc_info=context.error)
 
 # =========================
 # MAIN
@@ -136,7 +150,6 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
-    app.add_error_handler(error_handler)
 
     app.run_polling()
 
