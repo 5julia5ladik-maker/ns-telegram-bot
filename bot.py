@@ -3,21 +3,24 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputFile
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 
 # =========================
 # НАСТРОЙКИ
 # =========================
 TOKEN = "8367905898:AAEimA-3iLi-JqP9r4cJPnOzYE-L4eYsk-U"
 
-INVITE_LINK = "https://t.me/NaturalSense"   # ✅ как ты сказал
+INVITE_LINK = "https://t.me/NaturalSense"
 CONTACT_EMAIL = "naturalsense.pr@gmail.com"
 CONTACT_TG = "@NScollab"
 
 COVER_PATH = "cover.jpg"  # файл рядом с bot.py
 
 # =========================
-# ТЕКСТЫ (как на фото)
+# ТЕКСТЫ
 # =========================
 TITLE = "✨ NS · Natural Sense"
 SUBTITLE = "Распаковки · Бренды · Обзоры\nСравнения · Новости"
@@ -30,7 +33,6 @@ ABOUT_TEXT = (
     "Natural Sense — обзоры косметики, брендов и новинок."
 )
 
-# Текст для экрана сотрудничества (контакты теперь будут кнопками)
 COLLAB_TEXT = (
     "🤝 *Сотрудничество*\n\n"
     "Для предложений и партнёрств свяжитесь с нами удобным способом:"
@@ -82,13 +84,22 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["menu_message_id"] = msg.message_id
 
 async def edit_to_main_menu(query, context: ContextTypes.DEFAULT_TYPE):
+    # Возвращаемся к главному экрану (фото+caption+кнопки)
     chat_id = context.user_data.get("menu_chat_id")
     message_id = context.user_data.get("menu_message_id")
 
     if not chat_id or not message_id:
-        await query.edit_message_text("Нажми /start чтобы открыть меню заново.")
+        # Если ID не сохранились — пробуем просто вернуть меню в текущем сообщении
+        try:
+            await query.message.edit_caption(
+                caption=MAIN_CAPTION,
+                reply_markup=main_keyboard(),
+            )
+        except Exception:
+            await query.message.edit_text("Нажми /start чтобы открыть меню заново.")
         return
 
+    # Редактируем caption у фото
     await context.bot.edit_message_caption(
         chat_id=chat_id,
         message_id=message_id,
@@ -103,7 +114,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_main_menu(update, context)
 
 # =========================
-# КНОПКИ
+# КНОПКИ (исправлено)
 # =========================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -111,7 +122,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Выйти
     if query.data == "exit":
-        await query.edit_message_text("❌ Вы вышли из меню.")
+        await query.message.edit_text("❌ Вы вышли из меню.")
         return
 
     # Назад
@@ -121,21 +132,27 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # О канале
     if query.data == "about":
-        await query.edit_message_caption(
+        await query.message.edit_caption(
             caption=ABOUT_TEXT,
             parse_mode="Markdown",
             reply_markup=back_keyboard(),
         )
         return
 
-def keyboard_collab() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📩 Написать на почту", url=CONTACT_LINK)],
-        [InlineKeyboardButton("🔓 Войти в канал", url=INVITE_LINK)],
-        [InlineKeyboardButton("⟵ Назад", callback_data="back")]
-    ])
+    # Сотрудничество (контакты кнопками)
+    if query.data == "collab":
+        await query.message.edit_caption(
+            caption=COLLAB_TEXT,
+            parse_mode="Markdown",
+            reply_markup=collab_keyboard(),
         )
         return
+
+# =========================
+# ERROR HANDLER (чтобы не было "тихо не работает")
+# =========================
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logging.exception("Exception while handling an update:", exc_info=context.error)
 
 # =========================
 # MAIN
@@ -146,9 +163,9 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
+    app.add_error_handler(error_handler)
 
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-
