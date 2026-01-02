@@ -3,10 +3,7 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputFile
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO)
 
 # =========================
 # НАСТРОЙКИ
@@ -35,7 +32,7 @@ ABOUT_TEXT = (
 
 COLLAB_TEXT = (
     "🤝 *Сотрудничество*\n\n"
-    "Для предложений и партнёрств свяжитесь с нами удобным способом:"
+    "Выберите способ связи:"
 )
 
 # =========================
@@ -49,9 +46,9 @@ def main_keyboard():
         [InlineKeyboardButton("❌ Выйти", callback_data="exit")],
     ])
 
-def back_keyboard():
+def back_to_menu_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅ Назад", callback_data="back")]
+        [InlineKeyboardButton("⬅ Назад", callback_data="back_to_menu")]
     ])
 
 def collab_keyboard():
@@ -59,144 +56,68 @@ def collab_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📧 Написать на Email", url=f"mailto:{CONTACT_EMAIL}")],
         [InlineKeyboardButton("💬 Написать в Telegram", url=f"https://t.me/{tg_username}")],
-        [InlineKeyboardButton("⬅ Назад", callback_data="back")],
+        [InlineKeyboardButton("⬅ Назад", callback_data="back_to_menu")],
     ])
 
 # =========================
-# УТИЛИТЫ
+# ОТПРАВКА ГЛАВНОГО МЕНЮ (фото + кнопки)
 # =========================
-async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def send_main_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     if not os.path.exists(COVER_PATH):
-        await update.message.reply_text(
-            "❗ Не найден файл cover.jpg рядом с bot.py. Положи cover.jpg в папку с bot.py и перезапусти."
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❗ Не найден файл cover.jpg рядом с bot.py. Положи cover.jpg в папку с bot.py и перезапусти."
         )
         return
 
     with open(COVER_PATH, "rb") as f:
-        msg = await update.message.reply_photo(
+        await context.bot.send_photo(
+            chat_id=chat_id,
             photo=InputFile(f),
             caption=MAIN_CAPTION,
             reply_markup=main_keyboard(),
         )
 
-    # Запоминаем ID этого сообщения
-    context.user_data["menu_chat_id"] = msg.chat_id
-    context.user_data["menu_message_id"] = msg.message_id
-
-async def safe_edit_caption(query, context, *, caption, reply_markup, parse_mode=None):
-    """
-    Самая надежная правка:
-    1) пробуем через bot.edit_message_caption (по сохраненным id)
-    2) если не вышло — пробуем query.edit_message_caption
-    3) если и это не вышло — отправляем новое сообщение (чтобы не было "не работает")
-    """
-    chat_id = context.user_data.get("menu_chat_id")
-    message_id = context.user_data.get("menu_message_id")
-
-    # 1) По сохраненным ID
-    if chat_id and message_id:
-        try:
-            await context.bot.edit_message_caption(
-                chat_id=chat_id,
-                message_id=message_id,
-                caption=caption,
-                parse_mode=parse_mode,
-                reply_markup=reply_markup,
-            )
-            return
-        except Exception as e:
-            logging.exception("edit_message_caption(by saved ids) failed: %s", e)
-
-    # 2) По callback query
-    try:
-        await query.edit_message_caption(
-            caption=caption,
-            parse_mode=parse_mode,
-            reply_markup=reply_markup,
-        )
-        # на всякий случай пересохраним ID актуального сообщения
-        if query.message:
-            context.user_data["menu_chat_id"] = query.message.chat_id
-            context.user_data["menu_message_id"] = query.message.message_id
-        return
-    except Exception as e:
-        logging.exception("query.edit_message_caption failed: %s", e)
-
-    # 3) Фолбэк: новое сообщение, чтобы точно сработало
-    try:
-        msg = await query.message.reply_photo(
-            photo=query.message.photo[-1].file_id if query.message and query.message.photo else None,
-            caption=caption,
-            parse_mode=parse_mode,
-            reply_markup=reply_markup,
-        )
-        context.user_data["menu_chat_id"] = msg.chat_id
-        context.user_data["menu_message_id"] = msg.message_id
-    except Exception as e:
-        logging.exception("fallback send failed: %s", e)
-        await query.message.reply_text("Нажми /start чтобы открыть меню заново.")
-
-async def edit_to_main_menu(query, context: ContextTypes.DEFAULT_TYPE):
-    await safe_edit_caption(
-        query,
-        context,
-        caption=MAIN_CAPTION,
-        reply_markup=main_keyboard(),
-        parse_mode=None
-    )
-
 # =========================
 # /start
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_main_menu(update, context)
+    await send_main_menu(update.effective_chat.id, context)
 
 # =========================
-# КНОПКИ
+# CALLBACK BUTTONS
 # =========================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-
-    # если вдруг прилетело что-то странное
-    if not query:
-        return
-
-    logging.info("Callback data: %s", query.data)
-
-    # ВАЖНО: обязательно отвечаем на callback
     await query.answer()
 
+    chat_id = query.message.chat_id
+
+    # Выйти
     if query.data == "exit":
-        await query.message.edit_text("❌ Вы вышли из меню.")
+        await query.message.reply_text("❌ Вы вышли из меню.")
         return
 
-    if query.data == "back":
-        await edit_to_main_menu(query, context)
+    # Назад в главное меню (просто снова показываем фото-меню)
+    if query.data == "back_to_menu":
+        await send_main_menu(chat_id, context)
         return
 
+    # О канале — отправляем отдельным сообщением + кнопка назад
     if query.data == "about":
-        await safe_edit_caption(
-            query,
-            context,
-            caption=ABOUT_TEXT,
-            reply_markup=back_keyboard(),
-            parse_mode="Markdown"
+        await query.message.reply_text(
+            text=ABOUT_TEXT,
+            parse_mode="Markdown",
+            reply_markup=back_to_menu_keyboard(),
         )
         return
 
+    # Сотрудничество — ВОТ ТУТ 100% будут 2 кнопки (email + telegram)
     if query.data == "collab":
-        # чтобы ты прямо видел, что нажатие дошло до бота (мгновенный отклик)
-        try:
-            await query.answer("Открываю контакты ✅", show_alert=False)
-        except Exception:
-            pass
-
-        await safe_edit_caption(
-            query,
-            context,
-            caption=COLLAB_TEXT,
+        await query.message.reply_text(
+            text=COLLAB_TEXT,
+            parse_mode="Markdown",
             reply_markup=collab_keyboard(),
-            parse_mode="Markdown"
         )
         return
 
@@ -215,11 +136,9 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
-
     app.add_error_handler(error_handler)
 
-    # allowed_updates — чтобы точно принимались callback-и
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
