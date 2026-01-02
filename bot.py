@@ -25,12 +25,12 @@ STATUS = "🔒 Закрытый доступ"
 MAIN_CAPTION = f"{TITLE}\n\n{SUBTITLE}\n\n{STATUS}"
 
 ABOUT_TEXT = (
-    "ℹ️ О канале\n\n"
+    "ℹ️ *О канале*\n\n"
     "Natural Sense — обзоры косметики, брендов и новинок."
 )
 
 COLLAB_TEXT = (
-    "🤝 Сотрудничество\n\n"
+    "🤝 *Сотрудничество*\n\n"
     "Выберите удобный способ связи:"
 )
 
@@ -59,20 +59,20 @@ def collab_keyboard():
     ])
 
 # =========================
-# РЕДАКТОР ОДНОГО И ТОГО ЖЕ СООБЩЕНИЯ (фото)
+# РЕДАКТИРУЕМ ТОЛЬКО ОДНО СООБЩЕНИЕ (то самое с фото)
 # =========================
-async def edit_menu_caption(context: ContextTypes.DEFAULT_TYPE, *, chat_id: int, message_id: int,
-                            caption: str, reply_markup: InlineKeyboardMarkup | None):
-    # Редактируем ИМЕННО caption у фото (без отправки новых сообщений)
+async def edit_menu(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int,
+                    caption: str, reply_markup: InlineKeyboardMarkup | None, parse_mode: str | None = None):
     await context.bot.edit_message_caption(
         chat_id=chat_id,
         message_id=message_id,
         caption=caption,
+        parse_mode=parse_mode,
         reply_markup=reply_markup,
     )
 
 # =========================
-# /start -> отправляем ОДНО сообщение с фото и запоминаем его ID
+# /start
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not os.path.exists(COVER_PATH):
@@ -92,7 +92,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["menu_message_id"] = msg.message_id
 
 # =========================
-# CALLBACK КНОПКИ (ТОЛЬКО редактируем caption, НЕ шлём новые сообщения)
+# CALLBACK КНОПКИ
 # =========================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -101,52 +101,31 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.user_data.get("menu_chat_id")
     message_id = context.user_data.get("menu_message_id")
 
-    # если по какой-то причине ID не сохранены — просим /start (без создания лишних сообщений в нормальном сценарии)
     if not chat_id or not message_id:
-        try:
-            await query.answer("Нажми /start", show_alert=True)
-        except Exception:
-            pass
+        await query.answer("Нажми /start чтобы открыть меню", show_alert=True)
         return
 
     if query.data == "back":
-        await edit_menu_caption(
-            context,
-            chat_id=chat_id,
-            message_id=message_id,
-            caption=MAIN_CAPTION,
-            reply_markup=main_keyboard(),
-        )
+        await edit_menu(context, chat_id, message_id, MAIN_CAPTION, main_keyboard(), None)
         return
 
     if query.data == "about":
-        await edit_menu_caption(
-            context,
-            chat_id=chat_id,
-            message_id=message_id,
-            caption=ABOUT_TEXT,
-            reply_markup=back_keyboard(),
-        )
+        await edit_menu(context, chat_id, message_id, ABOUT_TEXT, back_keyboard(), "Markdown")
         return
 
+    # ✅ ВОТ ТУТ: по клику "Сотрудничество" появляются 2 кнопки перехода (email + tg)
     if query.data == "collab":
-        await edit_menu_caption(
-            context,
-            chat_id=chat_id,
-            message_id=message_id,
-            caption=COLLAB_TEXT,
-            reply_markup=collab_keyboard(),
-        )
+        await edit_menu(context, chat_id, message_id, COLLAB_TEXT, collab_keyboard(), "Markdown")
         return
 
     if query.data == "exit":
-        # НЕ превращаем в текстовое сообщение. Просто меняем caption и убираем кнопки.
-        await edit_menu_caption(
+        await edit_menu(
             context,
-            chat_id=chat_id,
-            message_id=message_id,
-            caption="❌ Вы вышли из меню.\n\nНажми /start чтобы открыть снова.",
-            reply_markup=None,
+            chat_id,
+            message_id,
+            "❌ Вы вышли из меню.\n\nНажми /start чтобы открыть снова.",
+            None,
+            None
         )
         return
 
