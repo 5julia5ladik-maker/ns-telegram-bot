@@ -128,12 +128,12 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Сотрудничество (контакты кнопками)
-    if query.data == "collab":
-        await query.edit_message_caption(
-            caption=COLLAB_TEXT,
-            parse_mode="Markdown",
-            reply_markup=collab_keyboard(),
+def keyboard_collab() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📩 Написать на почту", url=CONTACT_LINK)],
+        [InlineKeyboardButton("🔓 Войти в канал", url=INVITE_LINK)],
+        [InlineKeyboardButton("⟵ Назад", callback_data="back")]
+    ])
         )
         return
 
@@ -151,3 +151,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
