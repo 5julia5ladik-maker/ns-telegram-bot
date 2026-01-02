@@ -51,28 +51,20 @@ def back_keyboard():
     ])
 
 def collab_keyboard():
+    # ВАЖНО: Telegram часто не принимает mailto: в inline кнопках -> Button_url_invalid
+    # Поэтому делаем email через web compose (Gmail). Работает стабильно.
     tg_username = CONTACT_TG.replace("@", "").strip()
+    email_url = f"https://mail.google.com/mail/?view=cm&to={CONTACT_EMAIL}"
+    tg_url = f"https://t.me/{tg_username}"
+
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📧 Написать на Email", url=f"mailto:{CONTACT_EMAIL}")],
-        [InlineKeyboardButton("💬 Написать в Telegram", url=f"https://t.me/{tg_username}")],
+        [InlineKeyboardButton("📧 Написать на Email", url=email_url)],
+        [InlineKeyboardButton("💬 Написать в Telegram", url=tg_url)],
         [InlineKeyboardButton("⬅ Назад", callback_data="back")],
     ])
 
 # =========================
-# РЕДАКТИРУЕМ ТОЛЬКО ОДНО СООБЩЕНИЕ (то самое с фото)
-# =========================
-async def edit_menu(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int,
-                    caption: str, reply_markup: InlineKeyboardMarkup | None, parse_mode: str | None = None):
-    await context.bot.edit_message_caption(
-        chat_id=chat_id,
-        message_id=message_id,
-        caption=caption,
-        parse_mode=parse_mode,
-        reply_markup=reply_markup,
-    )
-
-# =========================
-# /start
+# /start -> одно сообщение с фото
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not os.path.exists(COVER_PATH):
@@ -82,52 +74,59 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     with open(COVER_PATH, "rb") as f:
-        msg = await update.message.reply_photo(
+        await update.message.reply_photo(
             photo=InputFile(f),
             caption=MAIN_CAPTION,
             reply_markup=main_keyboard(),
         )
 
-    context.user_data["menu_chat_id"] = msg.chat_id
-    context.user_data["menu_message_id"] = msg.message_id
-
 # =========================
-# CALLBACK КНОПКИ
+# CALLBACK КНОПКИ (редактируем ТО ЖЕ сообщение)
 # =========================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    chat_id = context.user_data.get("menu_chat_id")
-    message_id = context.user_data.get("menu_message_id")
-
-    if not chat_id or not message_id:
-        await query.answer("Нажми /start чтобы открыть меню", show_alert=True)
+    msg = query.message
+    if not msg:
         return
 
     if query.data == "back":
-        await edit_menu(context, chat_id, message_id, MAIN_CAPTION, main_keyboard(), None)
+        await msg.edit_caption(
+            caption=MAIN_CAPTION,
+            reply_markup=main_keyboard(),
+        )
         return
 
     if query.data == "about":
-        await edit_menu(context, chat_id, message_id, ABOUT_TEXT, back_keyboard(), "Markdown")
+        await msg.edit_caption(
+            caption=ABOUT_TEXT,
+            parse_mode="Markdown",
+            reply_markup=back_keyboard(),
+        )
         return
 
-    # ✅ ВОТ ТУТ: по клику "Сотрудничество" появляются 2 кнопки перехода (email + tg)
     if query.data == "collab":
-        await edit_menu(context, chat_id, message_id, COLLAB_TEXT, collab_keyboard(), "Markdown")
+        await msg.edit_caption(
+            caption=COLLAB_TEXT,
+            parse_mode="Markdown",
+            reply_markup=collab_keyboard(),
+        )
         return
 
     if query.data == "exit":
-        await edit_menu(
-            context,
-            chat_id,
-            message_id,
-            "❌ Вы вышли из меню.\n\nНажми /start чтобы открыть снова.",
-            None,
-            None
+        # НЕ edit_message_text — чтобы не ломать фото-сообщение
+        await msg.edit_caption(
+            caption="❌ Вы вышли из меню.\n\nНажми /start чтобы открыть снова.",
+            reply_markup=None,
         )
         return
+
+# =========================
+# ERROR HANDLER (чтобы видеть реальные ошибки в логах)
+# =========================
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logging.exception("ERROR:", exc_info=context.error)
 
 # =========================
 # MAIN
@@ -138,6 +137,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
+    app.add_error_handler(error_handler)
 
     app.run_polling()
 
