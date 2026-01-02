@@ -1,9 +1,8 @@
-import os
+import logging
 from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputFile,
 )
 from telegram.ext import (
     Application,
@@ -12,77 +11,89 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# ===== ENV =====
-TOKEN = os.getenv("8367905898:AAEimA-3iLi-JqP9r4cJPnOzYE-L4eYsk-U")
-INVITE_LINK = os.getenv("5443870760")
-CONTACT_EMAIL = os.getenv("naturalsense.pr@gmail.com")
-CONTACT_TG = os.getenv("@NScollab")
+# =========================
+# 🔴 ДАННЫЕ (ПРЯМО В КОДЕ)
+# =========================
 
-# ===== START =====
+TOKEN = "8367905898:AAEimA-3iLi-JqP9r4cJPnOzYE-L4eYsk-U"
+
+INVITE_LINK = "https://t.me/+5443870760"
+CONTACT_EMAIL = "naturalsense.pr@gmail.com"
+CONTACT_TG = "@NScollab"
+
+# =========================
+# ЛОГИ
+# =========================
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+
+# =========================
+# /start
+# =========================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "✨ *NS · Natural Sense*\n\n"
+        "Распаковки · Бренды · Обзоры\n"
+        "Сравнения · Новости\n\n"
+        "🔒 *Закрытый доступ*"
+    )
+
     keyboard = [
-        [InlineKeyboardButton("🔒 Войти в канал", url=INVITE_LINK)],
+        [InlineKeyboardButton("🔐 Войти в канал", url=INVITE_LINK)],
         [InlineKeyboardButton("ℹ️ О канале", callback_data="about")],
         [InlineKeyboardButton("🤝 Сотрудничество", callback_data="collab")],
         [InlineKeyboardButton("❌ Выйти", callback_data="exit")],
     ]
 
-    caption = (
-        "✨ **NS • Natural Sense** ✨\n\n"
-        "Распаковки • Бренды • Обзоры\n"
-        "Сравнения • Новости\n\n"
-        "🔒 Закрытый доступ"
-    )
-
-    await update.message.reply_photo(
-        photo=InputFile("cover.jpg"),
-        caption=caption,
-        reply_markup=InlineKeyboardMarkup(keyboard),
+    await update.message.reply_text(
+        text=text,
         parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
-# ===== BUTTONS =====
+# =========================
+# КНОПКИ
+# =========================
+
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data == "about":
-        await query.edit_message_caption(
-            caption=(
-                "✨ **NS • Natural Sense** ✨\n\n"
-                "Премиальный канал о косметике:\n"
-                "• честные обзоры\n"
-                "• сравнения брендов\n"
-                "• новинки индустрии\n\n"
-                "🔒 Доступ по приглашению"
-            ),
-            reply_markup=query.message.reply_markup,
+        await query.message.reply_text(
+            "ℹ️ *О канале*\n\n"
+            "Natural Sense — обзоры косметики, брендов и новинок.",
             parse_mode="Markdown",
         )
 
     elif query.data == "collab":
-        await query.edit_message_caption(
-            caption=(
-                "🤝 **Сотрудничество**\n\n"
-                f"📧 Email: `{CONTACT_EMAIL}`\n"
-                f"💬 Telegram: {CONTACT_TG}"
-            ),
-            reply_markup=query.message.reply_markup,
+        await query.message.reply_text(
+            f"🤝 *Сотрудничество*\n\n"
+            f"📧 Email: {CONTACT_EMAIL}\n"
+            f"💬 Telegram: {CONTACT_TG}",
             parse_mode="Markdown",
         )
 
     elif query.data == "exit":
-        await query.edit_message_caption(
-            caption="❌ Вы вышли. Чтобы вернуться — напишите /start"
-        )
+        await query.message.reply_text("❌ Вы вышли из меню.")
 
-# ===== MAIN =====
+# =========================
+# MAIN
+# =========================
+
 def main():
+    print("✅ BOT STARTING")
+
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
 
+    print("✅ BOT RUNNING")
     app.run_polling()
 
 if __name__ == "__main__":
