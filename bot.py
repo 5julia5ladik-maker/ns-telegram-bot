@@ -5,7 +5,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 # =========================
@@ -63,7 +63,7 @@ def collab_keyboard():
     ])
 
 # =========================
-# УТИЛИТА: отправить "главное меню" С КАРТИНКОЙ
+# УТИЛИТЫ
 # =========================
 async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not os.path.exists(COVER_PATH):
@@ -79,32 +79,70 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_keyboard(),
         )
 
-    # Запоминаем ID этого сообщения, чтобы потом его редактировать
+    # Запоминаем ID этого сообщения
     context.user_data["menu_chat_id"] = msg.chat_id
     context.user_data["menu_message_id"] = msg.message_id
 
-async def edit_to_main_menu(query, context: ContextTypes.DEFAULT_TYPE):
-    # Возвращаемся к главному экрану (фото+caption+кнопки)
+async def safe_edit_caption(query, context, *, caption, reply_markup, parse_mode=None):
+    """
+    Самая надежная правка:
+    1) пробуем через bot.edit_message_caption (по сохраненным id)
+    2) если не вышло — пробуем query.edit_message_caption
+    3) если и это не вышло — отправляем новое сообщение (чтобы не было "не работает")
+    """
     chat_id = context.user_data.get("menu_chat_id")
     message_id = context.user_data.get("menu_message_id")
 
-    if not chat_id or not message_id:
-        # Если ID не сохранились — пробуем просто вернуть меню в текущем сообщении
+    # 1) По сохраненным ID
+    if chat_id and message_id:
         try:
-            await query.message.edit_caption(
-                caption=MAIN_CAPTION,
-                reply_markup=main_keyboard(),
+            await context.bot.edit_message_caption(
+                chat_id=chat_id,
+                message_id=message_id,
+                caption=caption,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
             )
-        except Exception:
-            await query.message.edit_text("Нажми /start чтобы открыть меню заново.")
-        return
+            return
+        except Exception as e:
+            logging.exception("edit_message_caption(by saved ids) failed: %s", e)
 
-    # Редактируем caption у фото
-    await context.bot.edit_message_caption(
-        chat_id=chat_id,
-        message_id=message_id,
+    # 2) По callback query
+    try:
+        await query.edit_message_caption(
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        # на всякий случай пересохраним ID актуального сообщения
+        if query.message:
+            context.user_data["menu_chat_id"] = query.message.chat_id
+            context.user_data["menu_message_id"] = query.message.message_id
+        return
+    except Exception as e:
+        logging.exception("query.edit_message_caption failed: %s", e)
+
+    # 3) Фолбэк: новое сообщение, чтобы точно сработало
+    try:
+        msg = await query.message.reply_photo(
+            photo=query.message.photo[-1].file_id if query.message and query.message.photo else None,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        context.user_data["menu_chat_id"] = msg.chat_id
+        context.user_data["menu_message_id"] = msg.message_id
+    except Exception as e:
+        logging.exception("fallback send failed: %s", e)
+        await query.message.reply_text("Нажми /start чтобы открыть меню заново.")
+
+async def edit_to_main_menu(query, context: ContextTypes.DEFAULT_TYPE):
+    await safe_edit_caption(
+        query,
+        context,
         caption=MAIN_CAPTION,
         reply_markup=main_keyboard(),
+        parse_mode=None
     )
 
 # =========================
@@ -114,42 +152,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_main_menu(update, context)
 
 # =========================
-# КНОПКИ (исправлено)
+# КНОПКИ
 # =========================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+
+    # если вдруг прилетело что-то странное
+    if not query:
+        return
+
+    logging.info("Callback data: %s", query.data)
+
+    # ВАЖНО: обязательно отвечаем на callback
     await query.answer()
 
-    # Выйти
     if query.data == "exit":
         await query.message.edit_text("❌ Вы вышли из меню.")
         return
 
-    # Назад
     if query.data == "back":
         await edit_to_main_menu(query, context)
         return
 
-    # О канале
     if query.data == "about":
-        await query.message.edit_caption(
+        await safe_edit_caption(
+            query,
+            context,
             caption=ABOUT_TEXT,
-            parse_mode="Markdown",
             reply_markup=back_keyboard(),
+            parse_mode="Markdown"
         )
         return
 
-    # Сотрудничество (контакты кнопками)
     if query.data == "collab":
-        await query.message.edit_caption(
+        # чтобы ты прямо видел, что нажатие дошло до бота (мгновенный отклик)
+        try:
+            await query.answer("Открываю контакты ✅", show_alert=False)
+        except Exception:
+            pass
+
+        await safe_edit_caption(
+            query,
+            context,
             caption=COLLAB_TEXT,
-            parse_mode="Markdown",
             reply_markup=collab_keyboard(),
+            parse_mode="Markdown"
         )
         return
 
 # =========================
-# ERROR HANDLER (чтобы не было "тихо не работает")
+# ERROR HANDLER
 # =========================
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.exception("Exception while handling an update:", exc_info=context.error)
@@ -163,9 +215,11 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
+
     app.add_error_handler(error_handler)
 
-    app.run_polling()
+    # allowed_updates — чтобы точно принимались callback-и
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
