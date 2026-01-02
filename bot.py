@@ -6,33 +6,31 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 logging.basicConfig(level=logging.INFO)
 
 # =========================
-# НАСТРОЙКИ (как ты просил)
+# НАСТРОЙКИ
 # =========================
 TOKEN = "8367905898:AAEimA-3iLi-JqP9r4cJPnOzYE-L4eYsk-U"
 
-INVITE_LINK = "https://t.me/NaturalSense"   # ✅ как ты сказал
+INVITE_LINK = "https://t.me/NaturalSense"
 CONTACT_EMAIL = "naturalsense.pr@gmail.com"
 CONTACT_TG = "@NScollab"
 
-COVER_PATH = "cover.jpg"  # файл рядом с bot.py
+COVER_PATH = "cover.jpg"
 
 # =========================
-# ТЕКСТЫ (как на фото)
+# ТЕКСТЫ
 # =========================
 TITLE = "✨ NS · Natural Sense"
 SUBTITLE = "Распаковки · Бренды · Обзоры\nСравнения · Новости"
 STATUS = "🔒 Закрытый доступ"
-
 MAIN_CAPTION = f"{TITLE}\n\n{SUBTITLE}\n\n{STATUS}"
 
 ABOUT_TEXT = (
-    "ℹ️ *О канале*\n\n"
+    "ℹ️ О канале\n\n"
     "Natural Sense — обзоры косметики, брендов и новинок."
 )
 
-# ВАЖНО: контакты убраны из текста — они будут кнопками
 COLLAB_TEXT = (
-    "🤝 *Сотрудничество*\n\n"
+    "🤝 Сотрудничество\n\n"
     "Выберите удобный способ связи:"
 )
 
@@ -57,14 +55,26 @@ def collab_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📧 Написать на Email", url=f"mailto:{CONTACT_EMAIL}")],
         [InlineKeyboardButton("💬 Написать в Telegram", url=f"https://t.me/{tg_username}")],
-        [InlineKeyboardButton("⬅ Назад", callback_data="back")]
+        [InlineKeyboardButton("⬅ Назад", callback_data="back")],
     ])
 
 # =========================
-# УТИЛИТА: отправить / обновить "главное меню" С КАРТИНКОЙ
+# РЕДАКТОР ОДНОГО И ТОГО ЖЕ СООБЩЕНИЯ (фото)
 # =========================
-async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Отправляем одно красивое сообщение с фото + caption + кнопки
+async def edit_menu_caption(context: ContextTypes.DEFAULT_TYPE, *, chat_id: int, message_id: int,
+                            caption: str, reply_markup: InlineKeyboardMarkup | None):
+    # Редактируем ИМЕННО caption у фото (без отправки новых сообщений)
+    await context.bot.edit_message_caption(
+        chat_id=chat_id,
+        message_id=message_id,
+        caption=caption,
+        reply_markup=reply_markup,
+    )
+
+# =========================
+# /start -> отправляем ОДНО сообщение с фото и запоминаем его ID
+# =========================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not os.path.exists(COVER_PATH):
         await update.message.reply_text(
             "❗ Не найден файл cover.jpg рядом с bot.py. Положи cover.jpg в папку с bot.py и перезапусти."
@@ -78,66 +88,65 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_keyboard(),
         )
 
-    # Запоминаем ID этого сообщения, чтобы потом его редактировать
     context.user_data["menu_chat_id"] = msg.chat_id
     context.user_data["menu_message_id"] = msg.message_id
 
-async def edit_to_main_menu(query, context: ContextTypes.DEFAULT_TYPE):
-    # Возвращаемся к главному экрану (фото+caption+кнопки)
-    chat_id = context.user_data.get("menu_chat_id")
-    message_id = context.user_data.get("menu_message_id")
-
-    if not chat_id or not message_id:
-        # ВАЖНО: не делаем edit_message_text (чтобы не сломать фото-сообщение)
-        await query.message.reply_text("Нажми /start чтобы открыть меню заново.")
-        return
-
-    # Редактируем caption у фото
-    await context.bot.edit_message_caption(
-        chat_id=chat_id,
-        message_id=message_id,
-        caption=MAIN_CAPTION,
-        reply_markup=main_keyboard(),
-    )
-
 # =========================
-# /start
-# =========================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_main_menu(update, context)
-
-# =========================
-# КНОПКИ
+# CALLBACK КНОПКИ (ТОЛЬКО редактируем caption, НЕ шлём новые сообщения)
 # =========================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # Выйти (ВАЖНО: НЕ edit_message_text, иначе "убьёт" фото и дальше не будет работать edit_caption)
-    if query.data == "exit":
-        await query.answer("❌ Вы вышли из меню.", show_alert=True)
+    chat_id = context.user_data.get("menu_chat_id")
+    message_id = context.user_data.get("menu_message_id")
+
+    # если по какой-то причине ID не сохранены — просим /start (без создания лишних сообщений в нормальном сценарии)
+    if not chat_id or not message_id:
+        try:
+            await query.answer("Нажми /start", show_alert=True)
+        except Exception:
+            pass
         return
 
-    # Назад
     if query.data == "back":
-        await edit_to_main_menu(query, context)
+        await edit_menu_caption(
+            context,
+            chat_id=chat_id,
+            message_id=message_id,
+            caption=MAIN_CAPTION,
+            reply_markup=main_keyboard(),
+        )
         return
 
-    # О канале — меняем caption у фото
     if query.data == "about":
-        await query.message.edit_caption(
+        await edit_menu_caption(
+            context,
+            chat_id=chat_id,
+            message_id=message_id,
             caption=ABOUT_TEXT,
-            parse_mode="Markdown",
             reply_markup=back_keyboard(),
         )
         return
 
-    # Сотрудничество — меняем caption у фото + показываем 2 кнопки (email + telegram)
     if query.data == "collab":
-        await query.message.edit_caption(
+        await edit_menu_caption(
+            context,
+            chat_id=chat_id,
+            message_id=message_id,
             caption=COLLAB_TEXT,
-            parse_mode="Markdown",
             reply_markup=collab_keyboard(),
+        )
+        return
+
+    if query.data == "exit":
+        # НЕ превращаем в текстовое сообщение. Просто меняем caption и убираем кнопки.
+        await edit_menu_caption(
+            context,
+            chat_id=chat_id,
+            message_id=message_id,
+            caption="❌ Вы вышли из меню.\n\nНажми /start чтобы открыть снова.",
+            reply_markup=None,
         )
         return
 
