@@ -157,13 +157,22 @@ def build_xlsx(rows, path="integrations.xlsx"):
     wb = Workbook()
     ws = wb.active
     ws.title = "integrations"
+
     headers = ["id","created_at","user_id","username","brand","product","budget","contact","extra"]
     ws.append(headers)
+
     for r in rows:
-        ws.append(list(r))
-    for i in range(1, len(headers)+1):
+        r = list(r)
+        # FIX: убрать timezone у даты
+        if r[1] is not None and hasattr(r[1], "tzinfo"):
+            r[1] = r[1].replace(tzinfo=None)
+        ws.append(r)
+
+    for i in range(1, len(headers) + 1):
         ws.column_dimensions[get_column_letter(i)].width = 22
+
     wb.save(path)
+
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await send_menu_photo(ctx, update.effective_chat.id, MAIN_CAPTION)
@@ -341,3 +350,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
