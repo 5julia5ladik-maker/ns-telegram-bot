@@ -3,13 +3,7 @@ import logging
 import asyncio
 from datetime import datetime
 
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Update,
-    InputFile,
-    Bot,
-)
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputFile, Bot
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -34,7 +28,6 @@ ADMIN_CHAT_ID = 5443870760
 INVITE_LINK = "https://t.me/NaturalSense"
 CONTACT_EMAIL = "naturalsense.pr@gmail.com"
 CONTACT_TG = "@NScollab"
-
 COVER_PATH = "cover.jpg"
 
 # =========================
@@ -63,12 +56,13 @@ INTEGRATION_INTRO = (
     "Отвечайте по шагам. Чтобы отменить — отправьте /cancel."
 )
 
-SUBMIT_CAPTION = (
-    f"{TITLE}\n\n"
-    "✅ Заявка отправлена.\n"
-    "Мы свяжемся с вами по указанному контакту.\n\n"
-    f"{STATUS}"
-)
+SUCCESS_LINE = "✅ Заявка отправлена.\nМы свяжемся с вами по указанному контакту."
+
+# ВОТ ЭТО — именно "MAIN_CAPTION + подпись ✅ ..."
+SUCCESS_CAPTION = f"{TITLE}\n\n{SUCCESS_LINE}\n\n{STATUS}"
+
+# через сколько секунд вернуть обычный MAIN_CAPTION (можешь изменить)
+SUCCESS_SHOW_SECONDS = 10
 
 # =========================
 # STATES (форма)
@@ -119,26 +113,38 @@ def collab_keyboard():
     ])
 
 # =========================
-# РЕДАКТИРОВАТЬ CAPTION У ФОТО-СООБЩЕНИЯ
+# ВСПОМОГАТЕЛЬНОЕ: запомнить текущее меню-сообщение
 # =========================
-async def edit_menu(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int,
-                    caption: str, reply_markup: InlineKeyboardMarkup | None,
-                    parse_mode: str | None = None):
+def remember_menu_from_message(context: ContextTypes.DEFAULT_TYPE, msg):
+    context.user_data["menu_chat_id"] = msg.chat_id
+    context.user_data["menu_message_id"] = msg.message_id
+
+async def edit_caption(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int,
+                       caption: str, reply_markup: InlineKeyboardMarkup | None,
+                       parse_mode: str | None = None):
     await context.bot.edit_message_caption(
         chat_id=chat_id,
         message_id=message_id,
         caption=caption,
-        parse_mode=parse_mode,
         reply_markup=reply_markup,
+        parse_mode=parse_mode,
     )
 
-def remember_menu_from_message(context: ContextTypes.DEFAULT_TYPE, msg):
-    """Сохраняем ID именно того сообщения-меню (с фото), которое пользователь сейчас видит."""
-    context.user_data["menu_chat_id"] = msg.chat_id
-    context.user_data["menu_message_id"] = msg.message_id
+async def show_success_then_restore(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+    # Показать success caption
+    await edit_caption(context, chat_id, message_id, SUCCESS_CAPTION, main_keyboard(), None)
+
+    # Подождать и вернуть MAIN_CAPTION
+    await asyncio.sleep(SUCCESS_SHOW_SECONDS)
+
+    # Если за это время пользователь нажал другие кнопки — всё равно вернём в "норму"
+    try:
+        await edit_caption(context, chat_id, message_id, MAIN_CAPTION, main_keyboard(), None)
+    except Exception as e:
+        logging.warning("Failed to restore MAIN_CAPTION: %s", e)
 
 # =========================
-# /start: отправить меню (и запомнить message_id)
+# /start
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -149,16 +155,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Если уже есть меню — попробуем отредактировать его, иначе отправим новое
+    # Если меню уже есть — попробуем отредактировать, иначе отправим новое
     menu_msg_id = context.user_data.get("menu_message_id")
     menu_chat_id = context.user_data.get("menu_chat_id")
 
     if menu_msg_id and menu_chat_id == chat_id:
         try:
-            await edit_menu(context, menu_chat_id, menu_msg_id, MAIN_CAPTION, main_keyboard(), None)
+            await edit_caption(context, menu_chat_id, menu_msg_id, MAIN_CAPTION, main_keyboard(), None)
             return
-        except Exception as e:
-            logging.warning("Failed to edit existing menu, sending new. err=%s", e)
+        except Exception:
+            pass
 
     with open(COVER_PATH, "rb") as f:
         msg = await context.bot.send_photo(
@@ -171,8 +177,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     remember_menu_from_message(context, msg)
 
 # =========================
-# КНОПКИ МЕНЮ
-# (ВАЖНО: редактируем именно то сообщение, на котором нажали)
+# КНОПКИ МЕНЮ (кроме формы)
 # =========================
 async def menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -182,7 +187,7 @@ async def menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    # Всегда запоминаем текущее меню-сообщение
+    # ВСЕГДА запоминаем то меню, на котором нажали
     remember_menu_from_message(context, msg)
 
     data = query.data
@@ -204,13 +209,12 @@ async def menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 # =========================
-# ФОРМА: старт по кнопке integration (внутри Сотрудничества)
+# ФОРМА: старт (кнопка внутри "Сотрудничество")
 # =========================
 async def integration_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # запоминаем меню, с которого стартовали форму (КЛЮЧЕВО!)
     if query.message:
         remember_menu_from_message(context, query.message)
 
@@ -265,27 +269,18 @@ async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     await notify_admin(context.bot, admin_text)
 
-    # ✅ ПИШЕМ РЕЗУЛЬТАТ ПОД КАРТИНКОЙ (в caption меню)
+    # ✅ ПОКАЗЫВАЕМ SUCCESS В CAPTION У МЕНЮ (и потом возвращаем)
     menu_chat_id = context.user_data.get("menu_chat_id")
     menu_message_id = context.user_data.get("menu_message_id")
 
     if menu_chat_id and menu_message_id:
-        try:
-            await edit_menu(
-                context,
-                chat_id=menu_chat_id,
-                message_id=menu_message_id,
-                caption=SUBMIT_CAPTION,
-                reply_markup=main_keyboard(),
-                parse_mode=None,
-            )
-        except Exception as e:
-            logging.exception("Failed to edit menu caption after submit: %s", e)
-            # крайний случай (если вдруг Telegram не дал редактировать)
-            await update.message.reply_text("✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту.")
+        # запускаем задачу "показать успех -> вернуть MAIN_CAPTION"
+        context.application.create_task(
+            show_success_then_restore(context, menu_chat_id, menu_message_id)
+        )
     else:
-        # если почему-то меню не найдено (крайний случай)
-        await update.message.reply_text("✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту.")
+        # если меню вдруг не найдено — хотя бы сообщением
+        await update.message.reply_text(SUCCESS_LINE)
 
     context.user_data.pop("integration_form", None)
     return ConversationHandler.END
@@ -318,7 +313,6 @@ def main():
     app.post_init = on_startup
     app.post_shutdown = on_shutdown
 
-    # Conversation форма
     form_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(integration_start, pattern=r"^integration$")],
         states={
@@ -334,8 +328,6 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(form_handler)
-
-    # Остальные кнопки меню
     app.add_handler(CallbackQueryHandler(menu_buttons))
 
     app.add_error_handler(error_handler)
