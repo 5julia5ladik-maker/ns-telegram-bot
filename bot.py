@@ -34,6 +34,7 @@ ADMIN_CHAT_ID = 5443870760
 INVITE_LINK = "https://t.me/NaturalSense"
 CONTACT_EMAIL = "naturalsense.pr@gmail.com"
 CONTACT_TG = "@NScollab"
+
 COVER_PATH = "cover.jpg"
 
 # =========================
@@ -42,6 +43,7 @@ COVER_PATH = "cover.jpg"
 TITLE = "✨ NS · Natural Sense"
 SUBTITLE = "Распаковки · Бренды · Обзоры\nСравнения · Новости"
 STATUS = "🔒 Закрытый доступ"
+
 MAIN_CAPTION = f"{TITLE}\n\n{SUBTITLE}\n\n{STATUS}"
 
 ABOUT_TEXT = (
@@ -61,7 +63,6 @@ INTEGRATION_INTRO = (
     "Отвечайте по шагам. Чтобы отменить — отправьте /cancel."
 )
 
-# Текст, который будет показываться ПОД КАРТИНКОЙ (вместо SUBTITLE) после отправки заявки
 SUBMIT_CAPTION = (
     f"{TITLE}\n\n"
     "✅ Заявка отправлена.\n"
@@ -118,7 +119,7 @@ def collab_keyboard():
     ])
 
 # =========================
-# ВСПОМОГАТЕЛЬНОЕ: редактировать caption меню-сообщения
+# РЕДАКТИРОВАТЬ CAPTION У ФОТО-СООБЩЕНИЯ
 # =========================
 async def edit_menu(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int,
                     caption: str, reply_markup: InlineKeyboardMarkup | None,
@@ -131,8 +132,13 @@ async def edit_menu(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id
         reply_markup=reply_markup,
     )
 
+def remember_menu_from_message(context: ContextTypes.DEFAULT_TYPE, msg):
+    """Сохраняем ID именно того сообщения-меню (с фото), которое пользователь сейчас видит."""
+    context.user_data["menu_chat_id"] = msg.chat_id
+    context.user_data["menu_message_id"] = msg.message_id
+
 # =========================
-# /start: не плодим дубли (сохраняем ID меню)
+# /start: отправить меню (и запомнить message_id)
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -143,18 +149,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Если уже есть меню — попробуем отредактировать его, иначе отправим новое
     menu_msg_id = context.user_data.get("menu_message_id")
     menu_chat_id = context.user_data.get("menu_chat_id")
 
-    # Если меню уже есть — редактируем
     if menu_msg_id and menu_chat_id == chat_id:
         try:
             await edit_menu(context, menu_chat_id, menu_msg_id, MAIN_CAPTION, main_keyboard(), None)
             return
         except Exception as e:
-            logging.warning("Failed to edit existing menu, will send new. err=%s", e)
+            logging.warning("Failed to edit existing menu, sending new. err=%s", e)
 
-    # Иначе отправляем новое меню
     with open(COVER_PATH, "rb") as f:
         msg = await context.bot.send_photo(
             chat_id=chat_id,
@@ -163,52 +168,51 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_keyboard(),
         )
 
-    context.user_data["menu_chat_id"] = msg.chat_id
-    context.user_data["menu_message_id"] = msg.message_id
+    remember_menu_from_message(context, msg)
 
 # =========================
-# CALLBACK КНОПКИ МЕНЮ (кроме формы)
+# КНОПКИ МЕНЮ
+# (ВАЖНО: редактируем именно то сообщение, на котором нажали)
 # =========================
 async def menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    logging.info(
-        "CLICK | user=%s id=%s data=%s",
-        query.from_user.username,
-        query.from_user.id,
-        query.data
-    )
-
-    chat_id = context.user_data.get("menu_chat_id")
-    message_id = context.user_data.get("menu_message_id")
-
-    if not chat_id or not message_id:
-        await query.answer("Нажми /start", show_alert=True)
+    msg = query.message
+    if not msg:
         return
 
-    if query.data == "back":
-        await edit_menu(context, chat_id, message_id, MAIN_CAPTION, main_keyboard(), None)
+    # Всегда запоминаем текущее меню-сообщение
+    remember_menu_from_message(context, msg)
+
+    data = query.data
+
+    if data == "back":
+        await msg.edit_caption(caption=MAIN_CAPTION, reply_markup=main_keyboard())
         return
 
-    if query.data == "about":
-        await edit_menu(context, chat_id, message_id, ABOUT_TEXT, back_keyboard(), "Markdown")
+    if data == "about":
+        await msg.edit_caption(caption=ABOUT_TEXT, parse_mode="Markdown", reply_markup=back_keyboard())
         return
 
-    if query.data == "collab":
-        await edit_menu(context, chat_id, message_id, COLLAB_TEXT, collab_keyboard(), "Markdown")
+    if data == "collab":
+        await msg.edit_caption(caption=COLLAB_TEXT, parse_mode="Markdown", reply_markup=collab_keyboard())
         return
 
-    if query.data == "exit":
-        await edit_menu(context, chat_id, message_id, EXIT_TEXT, None, None)
+    if data == "exit":
+        await msg.edit_caption(caption=EXIT_TEXT, reply_markup=None)
         return
 
 # =========================
-# ФОРМА: старт по кнопке "integration" (внутри Сотрудничества)
+# ФОРМА: старт по кнопке integration (внутри Сотрудничества)
 # =========================
 async def integration_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    # запоминаем меню, с которого стартовали форму (КЛЮЧЕВО!)
+    if query.message:
+        remember_menu_from_message(context, query.message)
 
     context.user_data["integration_form"] = {}
 
@@ -248,7 +252,7 @@ async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
     form = context.user_data.get("integration_form", {})
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-    # Сообщение админу (plain text, не ломается)
+    # админу (plain text)
     admin_text = (
         "📦 Новая заявка на интеграцию\n\n"
         f"🕒 {ts}\n"
@@ -261,19 +265,26 @@ async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     await notify_admin(context.bot, admin_text)
 
-    # ✅ ВОТ ЗДЕСЬ: НЕ шлём отдельное сообщение пользователю,
-    # а пишем текст прямо ПОД КАРТИНКОЙ (в caption меню) + возвращаем главные кнопки
-    chat_id = context.user_data.get("menu_chat_id")
-    message_id = context.user_data.get("menu_message_id")
-    if chat_id and message_id:
+    # ✅ ПИШЕМ РЕЗУЛЬТАТ ПОД КАРТИНКОЙ (в caption меню)
+    menu_chat_id = context.user_data.get("menu_chat_id")
+    menu_message_id = context.user_data.get("menu_message_id")
+
+    if menu_chat_id and menu_message_id:
         try:
-            await edit_menu(context, chat_id, message_id, SUBMIT_CAPTION, main_keyboard(), None)
+            await edit_menu(
+                context,
+                chat_id=menu_chat_id,
+                message_id=menu_message_id,
+                caption=SUBMIT_CAPTION,
+                reply_markup=main_keyboard(),
+                parse_mode=None,
+            )
         except Exception as e:
             logging.exception("Failed to edit menu caption after submit: %s", e)
-            # если вдруг не смогли — тогда хотя бы сообщением (крайний случай)
+            # крайний случай (если вдруг Telegram не дал редактировать)
             await update.message.reply_text("✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту.")
     else:
-        # если меню не сохранено — крайний случай
+        # если почему-то меню не найдено (крайний случай)
         await update.message.reply_text("✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту.")
 
     context.user_data.pop("integration_form", None)
@@ -307,6 +318,7 @@ def main():
     app.post_init = on_startup
     app.post_shutdown = on_shutdown
 
+    # Conversation форма
     form_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(integration_start, pattern=r"^integration$")],
         states={
@@ -322,6 +334,8 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(form_handler)
+
+    # Остальные кнопки меню
     app.add_handler(CallbackQueryHandler(menu_buttons))
 
     app.add_error_handler(error_handler)
