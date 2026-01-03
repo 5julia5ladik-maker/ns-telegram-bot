@@ -1,14 +1,34 @@
 import os
 import logging
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputFile
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+import asyncio
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+    InputFile,
+    Bot,
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+)
 
-logging.basicConfig(level=logging.INFO)
+# =========================
+# LOGGING
+# =========================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 
 # =========================
 # НАСТРОЙКИ
 # =========================
 TOKEN = "8367905898:AAEimA-3iLi-JqP9r4cJPnOzYE-L4eYsk-U"
+
+ADMIN_CHAT_ID = 5443870760  # ✅ твой ID
 
 INVITE_LINK = "https://t.me/NaturalSense"
 CONTACT_EMAIL = "naturalsense.pr@gmail.com"
@@ -35,41 +55,67 @@ COLLAB_TEXT = (
 )
 
 # =========================
+# УВЕДОМЛЕНИЯ АДМИНУ
+# =========================
+async def notify_admin(bot: Bot, text: str):
+    try:
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=text,
+            parse_mode="Markdown",
+        )
+    except Exception:
+        pass
+
+
+async def on_startup(app: Application):
+    await notify_admin(app.bot, "✅ *Bot started*")
+
+
+async def on_shutdown(app: Application):
+    await notify_admin(app.bot, "🛑 *Bot stopped / restarting*")
+
+# =========================
 # КНОПКИ
 # =========================
 def main_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔐 Войти в канал", url=INVITE_LINK)],
-        [InlineKeyboardButton("ℹ️ О канале", callback_data="about")],
-        [InlineKeyboardButton("🤝 Сотрудничество", callback_data="collab")],
-        [InlineKeyboardButton("❌ Выйти", callback_data="exit")],
-    ])
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🔐 Войти в канал", url=INVITE_LINK)],
+            [InlineKeyboardButton("ℹ️ О канале", callback_data="about")],
+            [InlineKeyboardButton("🤝 Сотрудничество", callback_data="collab")],
+            [InlineKeyboardButton("❌ Выйти", callback_data="exit")],
+        ]
+    )
+
 
 def back_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅ Назад", callback_data="back")]
-    ])
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅ Назад", callback_data="back")]]
+    )
+
 
 def collab_keyboard():
-    # ВАЖНО: Telegram часто не принимает mailto: в inline кнопках -> Button_url_invalid
-    # Поэтому делаем email через web compose (Gmail). Работает стабильно.
-    tg_username = CONTACT_TG.replace("@", "").strip()
+    # ⚠️ mailto: Telegram может валить → используем https
     email_url = f"https://mail.google.com/mail/?view=cm&to={CONTACT_EMAIL}"
+    tg_username = CONTACT_TG.replace("@", "").strip()
     tg_url = f"https://t.me/{tg_username}"
 
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📧 Написать на Email", url=email_url)],
-        [InlineKeyboardButton("💬 Написать в Telegram", url=tg_url)],
-        [InlineKeyboardButton("⬅ Назад", callback_data="back")],
-    ])
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📧 Написать на Email", url=email_url)],
+            [InlineKeyboardButton("💬 Написать в Telegram", url=tg_url)],
+            [InlineKeyboardButton("⬅ Назад", callback_data="back")],
+        ]
+    )
 
 # =========================
-# /start -> одно сообщение с фото
+# /start — одно сообщение с фото
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not os.path.exists(COVER_PATH):
         await update.message.reply_text(
-            "❗ Не найден файл cover.jpg рядом с bot.py. Положи cover.jpg в папку с bot.py и перезапусти."
+            "❗ Файл cover.jpg не найден рядом с bot.py"
         )
         return
 
@@ -81,11 +127,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 # =========================
-# CALLBACK КНОПКИ (редактируем ТО ЖЕ сообщение)
+# CALLBACK КНОПКИ
 # =========================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    logging.info(
+        "CLICK | user=%s id=%s data=%s",
+        query.from_user.username,
+        query.from_user.id,
+        query.data,
+    )
 
     msg = query.message
     if not msg:
@@ -115,7 +168,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == "exit":
-        # НЕ edit_message_text — чтобы не ломать фото-сообщение
         await msg.edit_caption(
             caption="❌ Вы вышли из меню.\n\nНажми /start чтобы открыть снова.",
             reply_markup=None,
@@ -123,23 +175,49 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 # =========================
-# ERROR HANDLER (чтобы видеть реальные ошибки в логах)
+# ERROR HANDLER
 # =========================
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logging.exception("ERROR:", exc_info=context.error)
+    await notify_admin(
+        context.bot,
+        f"🚨 *Bot error*\n`{context.error}`",
+    )
 
 # =========================
 # MAIN
 # =========================
 def main():
     print("✅ BOT STARTED")
+
     app = Application.builder().token(TOKEN).build()
+
+    app.post_init = on_startup
+    app.post_shutdown = on_shutdown
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
     app.add_error_handler(error_handler)
 
-    app.run_polling()
+    try:
+        app.run_polling()
+    except Exception as e:
+        logging.exception("FATAL CRASH:", exc_info=e)
+
+        try:
+            async def send_fatal():
+                bot = Bot(TOKEN)
+                await notify_admin(
+                    bot,
+                    f"💥 *Fatal crash*\n`{e}`",
+                )
+
+            asyncio.run(send_fatal())
+        except Exception:
+            pass
+
+        raise
+
 
 if __name__ == "__main__":
     main()
