@@ -56,7 +56,7 @@ INTEGRATION_INTRO = (
     "Отвечайте по шагам. Чтобы отменить — отправьте /cancel."
 )
 
-# ✅ Нужно: "как /start, но с подписью успеха"
+# ✅ "как /start, только с подписью успеха"
 SUCCESS_CAPTION = (
     f"{TITLE}\n\n"
     "✅ Заявка отправлена.\n"
@@ -114,31 +114,7 @@ def collab_keyboard():
     ])
 
 # =========================
-# ВСПОМОГАТЕЛЬНОЕ
-# =========================
-def remember_menu_from_message(context: ContextTypes.DEFAULT_TYPE, msg):
-    """Запоминаем ID именно того сообщения-меню (с фото), на котором нажали кнопку."""
-    context.user_data["menu_chat_id"] = msg.chat_id
-    context.user_data["menu_message_id"] = msg.message_id
-
-async def edit_caption(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int,
-    message_id: int,
-    caption: str,
-    reply_markup: InlineKeyboardMarkup | None,
-    parse_mode: str | None = None,
-):
-    await context.bot.edit_message_caption(
-        chat_id=chat_id,
-        message_id=message_id,
-        caption=caption,
-        reply_markup=reply_markup,
-        parse_mode=parse_mode,
-    )
-
-# =========================
-# /start
+# /start: отправить меню (не плодим дубли)
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -152,13 +128,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     menu_msg_id = context.user_data.get("menu_message_id")
     menu_chat_id = context.user_data.get("menu_chat_id")
 
-    # если меню уже есть — редактируем
+    # если меню уже есть — пробуем отредактировать (чтобы /start не спамил)
     if menu_msg_id and menu_chat_id == chat_id:
         try:
-            await edit_caption(context, menu_chat_id, menu_msg_id, MAIN_CAPTION, main_keyboard(), None)
+            await context.bot.edit_message_caption(
+                chat_id=menu_chat_id,
+                message_id=menu_msg_id,
+                caption=MAIN_CAPTION,
+                reply_markup=main_keyboard(),
+            )
             return
-        except Exception as e:
-            logging.warning("Failed to edit existing menu, sending new. err=%s", e)
+        except Exception:
+            pass
 
     # иначе отправим новое меню
     with open(COVER_PATH, "rb") as f:
@@ -168,10 +149,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption=MAIN_CAPTION,
             reply_markup=main_keyboard(),
         )
-    remember_menu_from_message(context, msg)
+
+    context.user_data["menu_chat_id"] = msg.chat_id
+    context.user_data["menu_message_id"] = msg.message_id
 
 # =========================
-# КНОПКИ МЕНЮ (кроме формы)
+# КНОПКИ МЕНЮ (не форма)
 # =========================
 async def menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -181,8 +164,9 @@ async def menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    # важно: всегда запоминаем меню, на котором нажали
-    remember_menu_from_message(context, msg)
+    # Запоминаем текущее меню-сообщение (чтобы "Назад" и др. работали стабильно)
+    context.user_data["menu_chat_id"] = msg.chat_id
+    context.user_data["menu_message_id"] = msg.message_id
 
     data = query.data
 
@@ -209,9 +193,10 @@ async def integration_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # запоминаем меню, с которого начали форму
+    # помним меню, с которого стартовали (на случай "Назад")
     if query.message:
-        remember_menu_from_message(context, query.message)
+        context.user_data["menu_chat_id"] = query.message.chat_id
+        context.user_data["menu_message_id"] = query.message.message_id
 
     context.user_data["integration_form"] = {}
 
@@ -245,13 +230,12 @@ async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
     extra = update.message.text.strip()
     if extra == "-":
         extra = "—"
-    context.user_data["integration_form"]["extra"] = extra
 
-    user = update.effective_user
     form = context.user_data.get("integration_form", {})
+    user = update.effective_user
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-    # админу (plain text)
+    # сообщение админу
     admin_text = (
         "📦 Новая заявка на интеграцию\n\n"
         f"🕒 {ts}\n"
@@ -260,31 +244,25 @@ async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"📦 Продукт: {form.get('product','—')}\n"
         f"💰 Бюджет/условия: {form.get('budget','—')}\n"
         f"📞 Контакт: {form.get('contact','—')}\n"
-        f"📝 Детали: {form.get('extra','—')}\n"
+        f"📝 Детали: {extra}\n"
     )
     await notify_admin(context.bot, admin_text)
 
-    # ✅ СРАЗУ возвращаем пользователю "как /start", но с SUCCESS_CAPTION
-    menu_chat_id = context.user_data.get("menu_chat_id")
-    menu_message_id = context.user_data.get("menu_message_id")
-
-    if menu_chat_id and menu_message_id:
-        try:
-            await edit_caption(
-                context,
-                chat_id=menu_chat_id,
-                message_id=menu_message_id,
+    # ✅ ГЛАВНОЕ: отправляем НОВОЕ меню, как /start, но с SUCCESS_CAPTION
+    if not os.path.exists(COVER_PATH):
+        await update.message.reply_text("✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту.")
+    else:
+        with open(COVER_PATH, "rb") as f:
+            msg = await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=InputFile(f),
                 caption=SUCCESS_CAPTION,
                 reply_markup=main_keyboard(),
-                parse_mode=None,
             )
-        except Exception as e:
-            logging.exception("Failed to show SUCCESS_CAPTION on menu: %s", e)
-            # крайний случай: если не смогли редактировать фото-сообщение
-            await update.message.reply_text("✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту.")
-    else:
-        # если меню не найдено — крайний случай
-        await update.message.reply_text("✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту.")
+
+        # запоминаем новое меню как активное
+        context.user_data["menu_chat_id"] = msg.chat_id
+        context.user_data["menu_message_id"] = msg.message_id
 
     context.user_data.pop("integration_form", None)
     return ConversationHandler.END
@@ -321,7 +299,7 @@ def main():
         entry_points=[CallbackQueryHandler(integration_start, pattern=r"^integration$")],
         states={
             FORM_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_brand)],
-            FORM_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_product)],
+            FORM_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMAND, integration_product)],
             FORM_BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_budget)],
             FORM_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_contact)],
             FORM_EXTRA: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_finish)],
