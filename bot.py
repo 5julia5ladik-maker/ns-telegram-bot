@@ -26,7 +26,7 @@ logging.basicConfig(
 )
 
 # =========================
-# НАСТРОЙКИ (v1.0 + форма)
+# НАСТРОЙКИ
 # =========================
 TOKEN = "8367905898:AAEimA-3iLi-JqP9r4cJPnOzYE-L4eYsk-U"
 ADMIN_CHAT_ID = 5443870760
@@ -51,7 +51,7 @@ ABOUT_TEXT = (
 
 COLLAB_TEXT = (
     "🤝 *Сотрудничество*\n\n"
-    "Выберите удобный способ связи:"
+    "Выберите удобный способ связи или оставьте заявку:"
 )
 
 EXIT_TEXT = "❌ Вы вышли из меню.\n\nНажми /start чтобы открыть снова."
@@ -67,19 +67,19 @@ INTEGRATION_INTRO = (
 FORM_BRAND, FORM_PRODUCT, FORM_BUDGET, FORM_CONTACT, FORM_EXTRA = range(5)
 
 # =========================
-# УВЕДОМЛЕНИЯ АДМИНУ
+# УВЕДОМЛЕНИЯ АДМИНУ (plain text)
 # =========================
 async def notify_admin(bot: Bot, text: str):
     try:
-        await bot.send_message(chat_id=ADMIN_CHAT_ID, text=text, parse_mode="Markdown")
-    except Exception:
-        pass
+        await bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
+    except Exception as e:
+        logging.exception("Failed to notify admin: %s", e)
 
 async def on_startup(app: Application):
-    await notify_admin(app.bot, "✅ *Bot started*")
+    await notify_admin(app.bot, "✅ Bot started")
 
 async def on_shutdown(app: Application):
-    await notify_admin(app.bot, "🛑 *Bot stopped / restarting*")
+    await notify_admin(app.bot, "🛑 Bot stopped / restarting")
 
 # =========================
 # КНОПКИ
@@ -89,7 +89,6 @@ def main_keyboard():
         [InlineKeyboardButton("🔐 Войти в канал", url=INVITE_LINK)],
         [InlineKeyboardButton("ℹ️ О канале", callback_data="about")],
         [InlineKeyboardButton("🤝 Сотрудничество", callback_data="collab")],
-        [InlineKeyboardButton("📦 Предложить интеграцию", callback_data="integration")],
         [InlineKeyboardButton("❌ Выйти", callback_data="exit")],
     ])
 
@@ -99,7 +98,6 @@ def back_keyboard():
     ])
 
 def collab_keyboard():
-    # ⚠️ mailto: Telegram может отклонить -> только https://
     email_url = f"https://mail.google.com/mail/?view=cm&to={CONTACT_EMAIL}"
     tg_username = CONTACT_TG.replace("@", "").strip()
     tg_url = f"https://t.me/{tg_username}"
@@ -107,6 +105,7 @@ def collab_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📧 Написать на Email", url=email_url)],
         [InlineKeyboardButton("💬 Написать в Telegram", url=tg_url)],
+        [InlineKeyboardButton("📦 Предложить интеграцию", callback_data="integration")],
         [InlineKeyboardButton("⬅ Назад", callback_data="back")],
     ])
 
@@ -139,7 +138,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     menu_msg_id = context.user_data.get("menu_message_id")
     menu_chat_id = context.user_data.get("menu_chat_id")
 
-    # Если меню уже есть — редактируем
     if menu_msg_id and menu_chat_id == chat_id:
         try:
             await edit_menu(
@@ -154,7 +152,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.warning("Failed to edit existing menu, will send new. err=%s", e)
 
-    # Иначе отправляем новое
     with open(COVER_PATH, "rb") as f:
         msg = await context.bot.send_photo(
             chat_id=chat_id,
@@ -204,17 +201,16 @@ async def menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 # =========================
-# ФОРМА: старт по кнопке "integration"
+# ФОРМА: старт по кнопке "integration" (внутри Сотрудничества)
 # =========================
 async def integration_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # пометим, что форма активна
     context.user_data["integration_form"] = {}
 
     await query.message.reply_text(
-        INTEGRATION_INTRO + "\n\n1) 🏷 *Название бренда / компании?*",
+        INTEGRATION_INTRO + "\n\n1) 🏷 Название бренда / компании?",
         parse_mode="Markdown",
     )
     return FORM_BRAND
@@ -247,14 +243,13 @@ async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     user = update.effective_user
     form = context.user_data.get("integration_form", {})
-
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
     admin_text = (
-        "📦 *Новая заявка на интеграцию*\n\n"
+        "📦 Новая заявка на интеграцию\n\n"
         f"🕒 {ts}\n"
-        f"👤 User: @{user.username if user.username else '—'} (ID: `{user.id}`)\n\n"
-        f"🏷 Бренд: *{form.get('brand','—')}*\n"
+        f"👤 User: @{user.username if user.username else '—'} (ID: {user.id})\n\n"
+        f"🏷 Бренд: {form.get('brand','—')}\n"
         f"📦 Продукт: {form.get('product','—')}\n"
         f"💰 Бюджет/условия: {form.get('budget','—')}\n"
         f"📞 Контакт: {form.get('contact','—')}\n"
@@ -267,9 +262,7 @@ async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту."
     )
 
-    # очистим форму
     context.user_data.pop("integration_form", None)
-
     return ConversationHandler.END
 
 async def integration_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -283,13 +276,12 @@ async def integration_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     err_text = str(context.error)
 
-    # чтобы не спамить, если случайно снова запустят 2 инстанса
     if "terminated by other getUpdates request" in err_text:
         logging.warning("Conflict: another getUpdates instance is running.")
         return
 
     logging.exception("ERROR:", exc_info=context.error)
-    await notify_admin(context.bot, f"🚨 *Bot error*\n`{err_text}`")
+    await notify_admin(context.bot, f"🚨 Bot error:\n{err_text}")
 
 # =========================
 # MAIN
@@ -301,7 +293,7 @@ def main():
     app.post_init = on_startup
     app.post_shutdown = on_shutdown
 
-    # Форма (Conversation)
+    # Форма (Conversation): стартуется по callback_data="integration"
     form_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(integration_start, pattern=r"^integration$")],
         states={
@@ -315,11 +307,8 @@ def main():
         allow_reentry=True,
     )
 
-    # Главное меню
     app.add_handler(CommandHandler("start", start))
     app.add_handler(form_handler)
-
-    # Остальные кнопки меню (чтобы "integration" не перехватывалось тут — pattern исключает)
     app.add_handler(CallbackQueryHandler(menu_buttons))
 
     app.add_error_handler(error_handler)
@@ -331,7 +320,7 @@ def main():
         try:
             async def _send():
                 bot = Bot(TOKEN)
-                await notify_admin(bot, f"💥 *Fatal crash*\n`{e}`")
+                await notify_admin(bot, f"💥 Fatal crash:\n{e}")
             asyncio.run(_send())
         except Exception:
             pass
