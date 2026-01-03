@@ -1,43 +1,39 @@
 import os
 import logging
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputFile, Bot
+from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    ConversationHandler,
-    MessageHandler,
-    filters,
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes,
+    ConversationHandler, MessageHandler, filters
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
 
 # =========================
-# НАСТРОЙКИ
+# CONFIG
 # =========================
-TOKEN = "8367905898:AAEimA-3iLi-JqP9r4cJPnOzYE-L4eYsk-U"
-ADMIN_CHAT_ID = 5443870760
+@dataclass(frozen=True)
+class Cfg:
+    TOKEN: str = "8367905898:AAEimA-3iLi-JqP9r4cJPnOzYE-L4eYsk-U"
+    ADMIN_CHAT_ID: int = 5443870760
 
-INVITE_LINK = "https://t.me/NaturalSense"
-CONTACT_EMAIL = "naturalsense.pr@gmail.com"
-CONTACT_TG = "@NScollab"
-COVER_PATH = "cover.jpg"
+    INVITE_LINK: str = "https://t.me/NaturalSense"
+    CONTACT_EMAIL: str = "naturalsense.pr@gmail.com"
+    CONTACT_TG: str = "@NScollab"
+    COVER_PATH: str = "cover.jpg"
 
-# =========================
-# ТЕКСТЫ
-# =========================
-TITLE = "✨ NS · Natural Sense"
-SUBTITLE = "Распаковки · Бренды · Обзоры\nСравнения · Новости"
-STATUS = "🔒 Закрытый доступ"
+    TITLE: str = "✨ NS · Natural Sense"
+    SUBTITLE: str = "Распаковки · Бренды · Обзоры\nСравнения · Новости"
+    STATUS: str = "🔒 Закрытый доступ"
 
-MAIN_CAPTION = f"{TITLE}\n\n{SUBTITLE}\n\n{STATUS}"
+
+CFG = Cfg()
+
+MAIN_CAPTION = f"{CFG.TITLE}\n\n{CFG.SUBTITLE}\n\n{CFG.STATUS}"
 
 ABOUT_TEXT = (
     "ℹ️ *О канале*\n\n"
@@ -56,186 +52,167 @@ INTEGRATION_INTRO = (
     "Отвечайте по шагам. Чтобы отменить — отправьте /cancel."
 )
 
-# ✅ "как /start, только с подписью успеха"
 SUCCESS_CAPTION = (
-    f"{TITLE}\n\n"
+    f"{CFG.TITLE}\n\n"
     "✅ Заявка отправлена.\n"
     "Мы свяжемся с вами по указанному контакту.\n\n"
-    f"{STATUS}"
+    f"{CFG.STATUS}"
 )
 
 # =========================
-# STATES (форма)
+# FORM (масштабируется одной таблицей)
 # =========================
-FORM_BRAND, FORM_PRODUCT, FORM_BUDGET, FORM_CONTACT, FORM_EXTRA = range(5)
+FORM_FIELDS = [
+    ("brand",  "1) 🏷 Название бренда / компании?"),
+    ("product","2) 📦 Что продвигаем? (продукт/линейка/ссылка)"),
+    ("budget", "3) 💰 Бюджет / условия? (сумма, бартер, % и т.д.)"),
+    ("contact","4) 📞 Контакт для связи (email или Telegram @username)"),
+    ("extra",  "5) 📝 Доп. детали (необязательно). Если нет — напиши: -"),
+]
+FORM_STATES = list(range(len(FORM_FIELDS)))  # 0..N-1
+
 
 # =========================
-# УВЕДОМЛЕНИЯ АДМИНУ (plain text)
+# HELPERS
 # =========================
+def tg_link(username: str) -> str:
+    return f"https://t.me/{username.replace('@', '').strip()}"
+
+def gmail_compose(email: str) -> str:
+    return f"https://mail.google.com/mail/?view=cm&to={email}"
+
+def kb_main() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔐 Войти в канал", url=CFG.INVITE_LINK)],
+        [InlineKeyboardButton("ℹ️ О канале", callback_data="about")],
+        [InlineKeyboardButton("🤝 Сотрудничество", callback_data="collab")],
+        [InlineKeyboardButton("❌ Выйти", callback_data="exit")],
+    ])
+
+def kb_back() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⬅ Назад", callback_data="back")]])
+
+def kb_collab() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📧 Написать на Email", url=gmail_compose(CFG.CONTACT_EMAIL))],
+        [InlineKeyboardButton("💬 Написать в Telegram", url=tg_link(CFG.CONTACT_TG))],
+        [InlineKeyboardButton("📦 Предложить интеграцию", callback_data="integration")],
+        [InlineKeyboardButton("⬅ Назад", callback_data="back")],
+    ])
+
 async def notify_admin(bot: Bot, text: str):
     try:
-        await bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
-    except Exception as e:
-        logging.exception("Failed to notify admin: %s", e)
+        await bot.send_message(chat_id=CFG.ADMIN_CHAT_ID, text=text)  # plain text
+    except Exception:
+        logging.exception("Admin notify failed")
 
+async def send_menu_photo(context: ContextTypes.DEFAULT_TYPE, chat_id: int, caption: str):
+    """Самый надёжный вариант: отправить НОВОЕ меню с фото."""
+    if not os.path.exists(CFG.COVER_PATH):
+        await context.bot.send_message(chat_id=chat_id, text="❗ cover.jpg не найден рядом с bot.py")
+        return None
+
+    with open(CFG.COVER_PATH, "rb") as f:
+        msg = await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=InputFile(f),
+            caption=caption,
+            reply_markup=kb_main(),
+        )
+    # запомним последнее меню (на будущее)
+    context.user_data["menu_chat_id"] = msg.chat_id
+    context.user_data["menu_message_id"] = msg.message_id
+    return msg
+
+
+# =========================
+# LIFECYCLE
+# =========================
 async def on_startup(app: Application):
     await notify_admin(app.bot, "✅ BOT STARTED")
 
 async def on_shutdown(app: Application):
     await notify_admin(app.bot, "🛑 BOT STOPPED / RESTARTING")
 
-# =========================
-# КНОПКИ
-# =========================
-def main_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔐 Войти в канал", url=INVITE_LINK)],
-        [InlineKeyboardButton("ℹ️ О канале", callback_data="about")],
-        [InlineKeyboardButton("🤝 Сотрудничество", callback_data="collab")],
-        [InlineKeyboardButton("❌ Выйти", callback_data="exit")],
-    ])
-
-def back_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅ Назад", callback_data="back")]
-    ])
-
-def collab_keyboard():
-    # Telegram иногда ругается на mailto:, поэтому делаем через web
-    email_url = f"https://mail.google.com/mail/?view=cm&to={CONTACT_EMAIL}"
-    tg_username = CONTACT_TG.replace("@", "").strip()
-    tg_url = f"https://t.me/{tg_username}"
-
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📧 Написать на Email", url=email_url)],
-        [InlineKeyboardButton("💬 Написать в Telegram", url=tg_url)],
-        [InlineKeyboardButton("📦 Предложить интеграцию", callback_data="integration")],
-        [InlineKeyboardButton("⬅ Назад", callback_data="back")],
-    ])
 
 # =========================
-# /start: отправить меню (не плодим дубли)
+# COMMANDS
 # =========================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_menu_photo(context, update.effective_chat.id, MAIN_CAPTION)
 
-    if not os.path.exists(COVER_PATH):
-        await update.message.reply_text(
-            "❗ Файл cover.jpg не найден рядом с bot.py. Положи cover.jpg в папку и перезапусти."
-        )
-        return
-
-    menu_msg_id = context.user_data.get("menu_message_id")
-    menu_chat_id = context.user_data.get("menu_chat_id")
-
-    # если меню уже есть — пробуем отредактировать (чтобы /start не спамил)
-    if menu_msg_id and menu_chat_id == chat_id:
-        try:
-            await context.bot.edit_message_caption(
-                chat_id=menu_chat_id,
-                message_id=menu_msg_id,
-                caption=MAIN_CAPTION,
-                reply_markup=main_keyboard(),
-            )
-            return
-        except Exception:
-            pass
-
-    # иначе отправим новое меню
-    with open(COVER_PATH, "rb") as f:
-        msg = await context.bot.send_photo(
-            chat_id=chat_id,
-            photo=InputFile(f),
-            caption=MAIN_CAPTION,
-            reply_markup=main_keyboard(),
-        )
-
-    context.user_data["menu_chat_id"] = msg.chat_id
-    context.user_data["menu_message_id"] = msg.message_id
 
 # =========================
-# КНОПКИ МЕНЮ (не форма)
+# MENU CALLBACKS
 # =========================
-async def menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+async def cb_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.message.edit_caption(caption=MAIN_CAPTION, reply_markup=kb_main())
 
-    msg = query.message
-    if not msg:
-        return
+async def cb_about(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.message.edit_caption(caption=ABOUT_TEXT, parse_mode="Markdown", reply_markup=kb_back())
 
-    # Запоминаем текущее меню-сообщение
-    context.user_data["menu_chat_id"] = msg.chat_id
-    context.user_data["menu_message_id"] = msg.message_id
+async def cb_collab(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.message.edit_caption(caption=COLLAB_TEXT, parse_mode="Markdown", reply_markup=kb_collab())
 
-    data = query.data
+async def cb_exit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.message.edit_caption(caption=EXIT_TEXT, reply_markup=None)
 
-    if data == "back":
-        await msg.edit_caption(caption=MAIN_CAPTION, reply_markup=main_keyboard())
-        return
+MENU_ACTIONS = {
+    "back": cb_back,
+    "about": cb_about,
+    "collab": cb_collab,
+    "exit": cb_exit,
+}
 
-    if data == "about":
-        await msg.edit_caption(caption=ABOUT_TEXT, parse_mode="Markdown", reply_markup=back_keyboard())
-        return
+async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    action = MENU_ACTIONS.get(q.data)
+    if action:
+        await action(update, context)
 
-    if data == "collab":
-        await msg.edit_caption(caption=COLLAB_TEXT, parse_mode="Markdown", reply_markup=collab_keyboard())
-        return
-
-    if data == "exit":
-        await msg.edit_caption(caption=EXIT_TEXT, reply_markup=None)
-        return
 
 # =========================
-# ФОРМА: старт (кнопка "integration" внутри сотрудничества)
+# INTEGRATION FORM
 # =========================
-async def integration_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    # помним меню, с которого стартовали
-    if query.message:
-        context.user_data["menu_chat_id"] = query.message.chat_id
-        context.user_data["menu_message_id"] = query.message.message_id
+async def form_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
 
     context.user_data["integration_form"] = {}
+    context.user_data["form_step"] = 0
 
-    await query.message.reply_text(
-        INTEGRATION_INTRO + "\n\n1) 🏷 Название бренда / компании?",
-        parse_mode="Markdown",
-    )
-    return FORM_BRAND
+    await q.message.reply_text(INTEGRATION_INTRO + "\n\n" + FORM_FIELDS[0][1], parse_mode="Markdown")
+    return FORM_STATES[0]
 
-async def integration_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["integration_form"]["brand"] = update.message.text.strip()
-    await update.message.reply_text("2) 📦 Что продвигаем? (продукт/линейка/ссылка)")
-    return FORM_PRODUCT
+async def form_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    step = int(context.user_data.get("form_step", 0))
+    text = (update.message.text or "").strip()
 
-async def integration_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["integration_form"]["product"] = update.message.text.strip()
-    await update.message.reply_text("3) 💰 Бюджет / условия? (сумма, бартер, % и т.д.)")
-    return FORM_BUDGET
+    key, _prompt = FORM_FIELDS[step]
+    if key == "extra" and text == "-":
+        text = "—"
+    context.user_data["integration_form"][key] = text
 
-async def integration_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["integration_form"]["budget"] = update.message.text.strip()
-    await update.message.reply_text("4) 📞 Контакт для связи (email или Telegram @username)")
-    return FORM_CONTACT
+    step += 1
+    context.user_data["form_step"] = step
 
-async def integration_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["integration_form"]["contact"] = update.message.text.strip()
-    await update.message.reply_text("5) 📝 Доп. детали (необязательно). Если нет — напиши: -")
-    return FORM_EXTRA
+    if step < len(FORM_FIELDS):
+        await update.message.reply_text(FORM_FIELDS[step][1])
+        return FORM_STATES[step]
 
-async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    extra = update.message.text.strip()
-    if extra == "-":
-        extra = "—"
-
+    # FINISH
     form = context.user_data.get("integration_form", {})
     user = update.effective_user
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-    # сообщение админу
     admin_text = (
         "📦 Новая заявка на интеграцию\n\n"
         f"🕒 {ts}\n"
@@ -244,89 +221,65 @@ async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"📦 Продукт: {form.get('product','—')}\n"
         f"💰 Бюджет/условия: {form.get('budget','—')}\n"
         f"📞 Контакт: {form.get('contact','—')}\n"
-        f"📝 Детали: {extra}\n"
+        f"📝 Детали: {form.get('extra','—')}\n"
     )
     await notify_admin(context.bot, admin_text)
 
-    # ✅ СТАБИЛЬНО: отправляем НОВОЕ меню (как /start), но с SUCCESS_CAPTION
-    if not os.path.exists(COVER_PATH):
-        await update.message.reply_text("✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту.")
-    else:
-        with open(COVER_PATH, "rb") as f:
-            msg = await context.bot.send_photo(
-                chat_id=update.effective_chat.id,
-                photo=InputFile(f),
-                caption=SUCCESS_CAPTION,
-                reply_markup=main_keyboard(),
-            )
-        # запоминаем новое меню как активное
-        context.user_data["menu_chat_id"] = msg.chat_id
-        context.user_data["menu_message_id"] = msg.message_id
+    # ✅ Как /start, но с подписью успеха (НОВОЕ фото-меню)
+    await send_menu_photo(context, update.effective_chat.id, SUCCESS_CAPTION)
 
     context.user_data.pop("integration_form", None)
+    context.user_data.pop("form_step", None)
     return ConversationHandler.END
 
-async def integration_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def form_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("integration_form", None)
+    context.user_data.pop("form_step", None)
     await update.message.reply_text("❌ Заявка отменена. Нажми /start чтобы вернуться в меню.")
     return ConversationHandler.END
 
+
 # =========================
-# ERROR HANDLER
+# ERRORS
 # =========================
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    err_text = str(context.error)
+    err = str(context.error)
 
-    if "terminated by other getUpdates request" in err_text:
-        logging.warning("Conflict: another getUpdates instance is running.")
+    # если запущено 2 инстанса — не спамим
+    if "terminated by other getUpdates request" in err:
+        logging.warning("Conflict: another getUpdates is running.")
         return
 
-    logging.exception("ERROR:", exc_info=context.error)
-    await notify_admin(context.bot, f"🚨 Bot error:\n{err_text}")
+    logging.exception("Unhandled error:", exc_info=context.error)
+    await notify_admin(context.bot, f"🚨 Bot error:\n{err}")
+
 
 # =========================
 # MAIN
 # =========================
 def main():
-    print("✅ BOT STARTED")
-
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(CFG.TOKEN).build()
     app.post_init = on_startup
     app.post_shutdown = on_shutdown
 
+    # /start
+    app.add_handler(CommandHandler("start", cmd_start))
+
+    # FORM
     form_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(integration_start, pattern=r"^integration$")],
-        states={
-            FORM_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_brand)],
-            FORM_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_product)],
-            FORM_BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_budget)],
-            FORM_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_contact)],
-            FORM_EXTRA: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_finish)],
-        },
-        fallbacks=[CommandHandler("cancel", integration_cancel)],
+        entry_points=[CallbackQueryHandler(form_start, pattern=r"^integration$")],
+        states={st: [MessageHandler(filters.TEXT & ~filters.COMMAND, form_step)] for st in FORM_STATES},
+        fallbacks=[CommandHandler("cancel", form_cancel)],
         allow_reentry=True,
     )
-
-    app.add_handler(CommandHandler("start", start))
     app.add_handler(form_handler)
 
-    # меню-кнопки
-    app.add_handler(CallbackQueryHandler(menu_buttons))
+    # MENU (исключаем integration, его забирает ConversationHandler)
+    app.add_handler(CallbackQueryHandler(menu_router, pattern=r"^(back|about|collab|exit)$"))
 
     app.add_error_handler(error_handler)
+    app.run_polling()
 
-    try:
-        app.run_polling()
-    except Exception as e:
-        logging.exception("FATAL CRASH:", exc_info=e)
-        try:
-            async def _send():
-                bot = Bot(TOKEN)
-                await notify_admin(bot, f"💥 Fatal crash:\n{e}")
-            asyncio.run(_send())
-        except Exception:
-            pass
-        raise
 
 if __name__ == "__main__":
     main()
