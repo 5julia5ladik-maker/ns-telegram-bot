@@ -61,6 +61,14 @@ INTEGRATION_INTRO = (
     "Отвечайте по шагам. Чтобы отменить — отправьте /cancel."
 )
 
+# Текст, который будет показываться ПОД КАРТИНКОЙ (вместо SUBTITLE) после отправки заявки
+SUBMIT_CAPTION = (
+    f"{TITLE}\n\n"
+    "✅ Заявка отправлена.\n"
+    "Мы свяжемся с вами по указанному контакту.\n\n"
+    f"{STATUS}"
+)
+
 # =========================
 # STATES (форма)
 # =========================
@@ -110,7 +118,7 @@ def collab_keyboard():
     ])
 
 # =========================
-# ВСПОМОГАТЕЛЬНОЕ: обновить меню (caption + кнопки)
+# ВСПОМОГАТЕЛЬНОЕ: редактировать caption меню-сообщения
 # =========================
 async def edit_menu(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int,
                     caption: str, reply_markup: InlineKeyboardMarkup | None,
@@ -124,7 +132,7 @@ async def edit_menu(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id
     )
 
 # =========================
-# /start: не плодим дубли
+# /start: не плодим дубли (сохраняем ID меню)
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -138,20 +146,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     menu_msg_id = context.user_data.get("menu_message_id")
     menu_chat_id = context.user_data.get("menu_chat_id")
 
+    # Если меню уже есть — редактируем
     if menu_msg_id and menu_chat_id == chat_id:
         try:
-            await edit_menu(
-                context,
-                chat_id=menu_chat_id,
-                message_id=menu_msg_id,
-                caption=MAIN_CAPTION,
-                reply_markup=main_keyboard(),
-                parse_mode=None,
-            )
+            await edit_menu(context, menu_chat_id, menu_msg_id, MAIN_CAPTION, main_keyboard(), None)
             return
         except Exception as e:
             logging.warning("Failed to edit existing menu, will send new. err=%s", e)
 
+    # Иначе отправляем новое меню
     with open(COVER_PATH, "rb") as f:
         msg = await context.bot.send_photo(
             chat_id=chat_id,
@@ -245,6 +248,7 @@ async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
     form = context.user_data.get("integration_form", {})
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
+    # Сообщение админу (plain text, не ломается)
     admin_text = (
         "📦 Новая заявка на интеграцию\n\n"
         f"🕒 {ts}\n"
@@ -255,12 +259,22 @@ async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"📞 Контакт: {form.get('contact','—')}\n"
         f"📝 Детали: {form.get('extra','—')}\n"
     )
-
     await notify_admin(context.bot, admin_text)
 
-    await update.message.reply_text(
-        "✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту."
-    )
+    # ✅ ВОТ ЗДЕСЬ: НЕ шлём отдельное сообщение пользователю,
+    # а пишем текст прямо ПОД КАРТИНКОЙ (в caption меню) + возвращаем главные кнопки
+    chat_id = context.user_data.get("menu_chat_id")
+    message_id = context.user_data.get("menu_message_id")
+    if chat_id and message_id:
+        try:
+            await edit_menu(context, chat_id, message_id, SUBMIT_CAPTION, main_keyboard(), None)
+        except Exception as e:
+            logging.exception("Failed to edit menu caption after submit: %s", e)
+            # если вдруг не смогли — тогда хотя бы сообщением (крайний случай)
+            await update.message.reply_text("✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту.")
+    else:
+        # если меню не сохранено — крайний случай
+        await update.message.reply_text("✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту.")
 
     context.user_data.pop("integration_form", None)
     return ConversationHandler.END
@@ -293,7 +307,6 @@ def main():
     app.post_init = on_startup
     app.post_shutdown = on_shutdown
 
-    # Форма (Conversation): стартуется по callback_data="integration"
     form_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(integration_start, pattern=r"^integration$")],
         states={
