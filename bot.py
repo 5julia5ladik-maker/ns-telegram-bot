@@ -79,10 +79,10 @@ async def notify_admin(bot: Bot, text: str):
         logging.exception("Failed to notify admin: %s", e)
 
 async def on_startup(app: Application):
-    await notify_admin(app.bot, "✅ Bot started")
+    await notify_admin(app.bot, "✅ BOT STARTED")
 
 async def on_shutdown(app: Application):
-    await notify_admin(app.bot, "🛑 Bot stopped / restarting")
+    await notify_admin(app.bot, "🛑 BOT STOPPED / RESTARTING")
 
 # =========================
 # КНОПКИ
@@ -101,7 +101,7 @@ def back_keyboard():
     ])
 
 def collab_keyboard():
-    # ⚠️ Telegram часто отклоняет mailto:, поэтому делаем через web
+    # Telegram иногда ругается на mailto:, поэтому делаем через web
     email_url = f"https://mail.google.com/mail/?view=cm&to={CONTACT_EMAIL}"
     tg_username = CONTACT_TG.replace("@", "").strip()
     tg_url = f"https://t.me/{tg_username}"
@@ -164,7 +164,7 @@ async def menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    # Запоминаем текущее меню-сообщение (чтобы "Назад" и др. работали стабильно)
+    # Запоминаем текущее меню-сообщение
     context.user_data["menu_chat_id"] = msg.chat_id
     context.user_data["menu_message_id"] = msg.message_id
 
@@ -193,7 +193,7 @@ async def integration_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # помним меню, с которого стартовали (на случай "Назад")
+    # помним меню, с которого стартовали
     if query.message:
         context.user_data["menu_chat_id"] = query.message.chat_id
         context.user_data["menu_message_id"] = query.message.message_id
@@ -248,7 +248,7 @@ async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     await notify_admin(context.bot, admin_text)
 
-    # ✅ ГЛАВНОЕ: отправляем НОВОЕ меню, как /start, но с SUCCESS_CAPTION
+    # ✅ СТАБИЛЬНО: отправляем НОВОЕ меню (как /start), но с SUCCESS_CAPTION
     if not os.path.exists(COVER_PATH):
         await update.message.reply_text("✅ Заявка отправлена. Мы свяжемся с вами по указанному контакту.")
     else:
@@ -259,7 +259,6 @@ async def integration_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 caption=SUCCESS_CAPTION,
                 reply_markup=main_keyboard(),
             )
-
         # запоминаем новое меню как активное
         context.user_data["menu_chat_id"] = msg.chat_id
         context.user_data["menu_message_id"] = msg.message_id
@@ -299,7 +298,7 @@ def main():
         entry_points=[CallbackQueryHandler(integration_start, pattern=r"^integration$")],
         states={
             FORM_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_brand)],
-            FORM_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMAND, integration_product)],
+            FORM_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_product)],
             FORM_BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_budget)],
             FORM_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_contact)],
             FORM_EXTRA: [MessageHandler(filters.TEXT & ~filters.COMMAND, integration_finish)],
@@ -310,6 +309,8 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(form_handler)
+
+    # меню-кнопки
     app.add_handler(CallbackQueryHandler(menu_buttons))
 
     app.add_error_handler(error_handler)
